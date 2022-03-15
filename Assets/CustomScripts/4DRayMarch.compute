@@ -1,0 +1,174 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+#define MAX_STEPS 100
+#define MAX_DIST 100
+#define SURF_DIST 1e-3
+#define MAX_OBJS 10
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float4> Result;
+const uint width;
+const uint height;
+float4 cPos;
+float4x4 cRot;
+//matrix <float,5,5> _CameraToWorld;
+float4 _lightDir;
+float4x4 _CameraInverseProjection;
+
+struct Ray {
+    float4 ro;
+    float4 rd;
+};
+
+struct Object {
+    float4 pos;
+    int type;
+    float4 color;
+    float4 dim;
+    int combType;
+
+    float4 r0;
+    float4 r1;
+    float4 r2;
+    float4 r3;
+};
+
+RWStructuredBuffer<Object> objs;
+int objSize;
+int numObjs;
+
+Ray CreateRay(float4 origin, float4 direction) {
+    Ray ray;
+    ray.ro = origin;
+    ray.rd = direction;
+    return ray;
+}
+
+Ray CreateCameraRay(float2 uv) {
+    float4 origin = cPos;
+    float4 direction = mul(_CameraInverseProjection, float4(uv, 0, 1));
+    direction = float4(direction.xyz,0);
+    direction = mul(cRot, direction);
+    //direction -= cPos;
+    direction = normalize(direction);
+    return CreateRay(origin, direction);
+}
+
+float SphereDist(float4 p, float4 c, float r) {
+    return length(p - c) - r;
+}
+
+float BoxDist(float4 p, float4 c, float4 b, float4x4 rMat) {
+    p -= c;
+    
+    p = mul(rMat,p);
+    
+    float4 d = abs(p) - b;
+    //credit for algorithm: https://www.shadertoy.com/view/4sjGWw
+    return min(max(d.x,max(d.y,max(d.z,d.w))),0.0) + length(max(d,0.0));
+}
+
+float GetDistToObject(float4 p, Object o) {
+    if (o.type == 0) {
+        float4x4 m = {o.r0,o.r1,o.r2,o.r3};
+        return BoxDist(p, o.pos, o.dim, m); 
+    }
+    if (o.type == 1) {
+        return SphereDist(p, o.pos, o.dim.x);
+    }
+    return 0; //should never happen
+}
+
+float combine(float d, float nd) {
+    return min(d, nd);
+}
+
+float GetDist(float4 p) {
+    float4 rawP = p;
+    float d = 1e+10;
+    for (int i = 0; i < numObjs; i++) {
+        Object o = objs[i];
+        float nd = GetDistToObject(p, o);
+        d = combine(d, nd);
+    }
+    d = combine(d,p.y+1);
+    
+    return d;
+}
+
+
+
+float Raymarch(float4 ro, float4 rd) {
+    float dO = 0;
+    float dS;
+    for (int i = 0; i < MAX_STEPS; i++) {
+        float4 p = ro + (dO * rd);
+        dS = GetDist(p);
+        dO += dS;
+        if (dS<SURF_DIST || dO>MAX_DIST) break;
+    }
+
+    return dO;
+}
+
+float4 GetNormal(float4 p) {
+    float2 e = float2(1e-2, 0);
+    float4 n = GetDist(p) - float4(
+        GetDist(p - e.xyyy),
+        GetDist(p - e.yxyy),
+        GetDist(p - e.yyxy),
+        GetDist(p - e.yyyx)
+        );
+    return normalize(n);
+}
+
+float GetLight(float4 p) {
+    float4 l = normalize(_lightDir);
+    float4 n = GetNormal(p);
+    float dif = clamp(dot(n, l), 0, 1);
+
+    //shadows
+    float d = Raymarch(p + n * SURF_DIST * 2, l);
+    //if (d < length(lightPos - p)) dif *= .1;
+    if (d < MAX_DIST) dif *= .6;
+    return max(.1,dif);
+}
+
+
+
+float4 GetSmartColor(float4 p) {
+    float lit = GetLight(p);
+    return float4(lit, lit, lit, 1);
+}
+
+float2 findUV(float2 id) {
+    // float2 uv = float2((id.xy + float2(0.5, 0.5)) / float2(width, height) * 2.0f + 1.0f);
+    // float2 uv = float2((id.xy + float2(0.5, 0.5)) / float2(width, height));
+    float2 uv = float2((id.x / width * 2.0f)-1.0f,(id.y / height * 2.0f)-1.0f);
+    // float2 uv = id;
+    return uv;
+}
+
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    //MakeCameraToWorld();
+    // TODO: insert actual code here!
+    float2 uv = findUV(id.xy);
+    // float maxD = distance(float2(0,0),findUV(float2(width,height)));
+    // float dist = distance(float2(0,0),uv)/maxD;
+    // Result[id.xy] = float4(dist,dist,dist,1);
+
+    Ray ray = CreateCameraRay(uv);
+
+    float d = Raymarch(ray.ro, ray.rd);
+    if (d >= MAX_DIST) {
+        Result[id.xy] = float4(ray.rd.xyz * 0.5f + 0.5f, 1.0f);
+    }
+    else {
+        float4 p = ray.ro + (ray.rd * d);
+        Result[id.xy] = GetSmartColor(p);
+    }
+}
