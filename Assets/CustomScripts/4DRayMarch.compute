@@ -92,7 +92,7 @@ float GetDist(float4 p) {
         float nd = GetDistToObject(p, o);
         d = combine(d, nd);
     }
-    d = combine(d,p.y+1);
+    d = combine(d,p.y+1 - cos(p.w));
     
     return d;
 }

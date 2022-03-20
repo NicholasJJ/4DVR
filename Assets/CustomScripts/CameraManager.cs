@@ -27,7 +27,7 @@ public class CameraManager : MonoBehaviour
     }
 
     private void Start() {
-        angleGiver = gameObject.GetComponentInParent<AngleGiver>();
+        angleGiver = GameObject.FindGameObjectWithTag("AG").GetComponent<AngleGiver>();
         _camera = gameObject.GetComponent<Camera>();
     }
 
@@ -38,13 +38,14 @@ public class CameraManager : MonoBehaviour
 
     private void SetShaderParameters(){
         Rotation4D cRot = angleGiver.getRotMat();
+        shader.SetVector("_lightDir", -lightSource.transform.forward);
         shader.SetMatrix("cRot",cRot.GetMatrix().transpose);
         shader.SetMatrix("_CameraInverseProjection", matFromList(new float[]{FOV,0,0,0,
                                                                              0,FOV,0,0,
                                                                              0,0,0,1,
                                                                              0,0,0,0}));
         shader.SetVector("cPos", angleGiver.getPosition()); // change this once we can move around
-        shader.SetVector("_lightDir",-lightSource.transform.forward);
+        
         
         
     }
